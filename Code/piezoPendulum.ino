@@ -118,7 +118,7 @@ const unsigned long PUSH_DEBOUNCE_DELAY = 50; // Debounce delay in milliseconds
 // ------------------------------------------------------------------------------------------------------------------------------
 // max Values
 #define MAX_MENU_ITEMS 7 // Number of menu items
-String menuOptions[MAX_MENU_ITEMS] = {
+String MenuOptionsShort[MAX_MENU_ITEMS] = {
     "All functions",
     "Push",
     "Catch",
@@ -126,6 +126,15 @@ String menuOptions[MAX_MENU_ITEMS] = {
     "Catch after 3",
     "Resonance",
     "Resonance        after 2"};
+
+String MenuOptionsLong[MAX_MENU_ITEMS] = {
+    "All functions: cycle through all functions sequentially",
+    "Push the pendulum ball",
+    "Push and Catch after First Impulse",
+    "Push and Catch after Second Impulse",
+    "Push and Catch after Third Impulse",
+    "Resonance: Propels the ball upon immediate impulse detection",
+    "Resonance after Second Impulse: Projects the ball after the second impulse is detected"};
 // Resonance and catch after third
 
 // for 64V
@@ -335,7 +344,7 @@ void menuSelectAction()
   if (serialDebug)
   {
     Serial.print("Piezo command selected: ");
-    Serial.println(menuOptions[menuItemIndex]); // Print the string
+    Serial.println(MenuOptionsShort[menuItemIndex]); // Print the string
   }
   delay(500);                           // Delay so that the push button does not cause the ball to not be in the right position
   ball_detected = false;                // if the push button caused the interrupt to be triggered, falsify it again
@@ -384,8 +393,32 @@ void displayMenuText()
     screen.setTextSize(TEXT_SIZE);
 
     // Print the menu index and option
-    screen.println(String(menuIndex + 1) + " - " + menuOptions[menuIndex]);
+    screen.println(String(menuIndex + 1) + " - " + MenuOptionsShort[menuIndex]);
   }
+
+  // Print the header at the top
+  screen.setCursor(STARTING_X, STARTING_Y_HEAD);
+  screen.setTextColor(COLOR_GREY);
+  screen.setTextSize(TEXT_SIZE);
+  screen.println(headline);
+  ledImpulse();
+}
+
+//instead of displayMenuText the full function name is displayed for comprehension
+void displayCurrentFunction()
+{
+  // Clear the menu area before displaying the new text
+  displayClearSection(STARTING_X, STARTING_Y_MODES, screen.width(), SCREEN_CLC_MODES_HEIGHT);
+
+    // Set cursor position
+    screen.setCursor(STARTING_X, 120);
+
+    // Set the text color: highlight the current menu item, otherwise use the default color
+    uint16_t color = (offset == 0) ? COLOR_MIMED_YELLOW : FONT_COLOR_HEADLINES;
+    screen.setTextColor(color);
+
+    // Set the text size for uniformity
+    screen.setTextSize(TEXT_SIZE);
 
   // Print the header at the top
   screen.setCursor(STARTING_X, STARTING_Y_HEAD);
@@ -782,7 +815,7 @@ void handleSerialInput()
     {
       // Assign the new value to time_to_release_nanosec
       timerDelays[menuItemIndex] = newValue;
-      Serial.println("New " + menuOptions[menuItemIndex] + " value set: " + inputString);
+      Serial.println("New " + MenuOptionsShort[menuItemIndex] + " value set: " + inputString);
     }
     else
     {
@@ -867,7 +900,7 @@ void setupSerial()
 //   handleSerialInput();
 //   executePushAndCatchAction(1);
 //   timerDelays[menuItemIndex]++;
-//   Serial.println(menuOptions[menuItemIndex]);
+//   Serial.println(MenuOptionsShort[menuItemIndex]);
 //   Serial.println(timerDelays[menuItemIndex]);
 // }
 
