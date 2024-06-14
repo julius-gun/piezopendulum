@@ -1,15 +1,13 @@
 /*!
- * @file main.ino
- * @brief This script is the main script to use the Piezo pendulum. The Raspberry Pi Pico RP2040 controls the display, reads the encoder and button inputs and controls the piezostack. 
+ * @file piezoPendulum.ino
+ * @brief This script is the main script to use the Piezo pendulum. The Raspberry Pi Pico RP2040 controls the display, reads the encoder and button inputs and controls the piezostack.
  * @n This demo supports at least Raspberry Pi Pico. Other boards are not tested. 
- * @author 
- * @author [JuliusGun]
- * @version V1.0 
- * @date 2024-05-31
- * @thanks to Jan Rodewald, who developed the first version V0.1, and for help along the way
+ * @authors [Julius Gun, Jan Rodewald] //Jan Rodewald developed the first version V0.1
+ * @version V1.2
+ * @date 2024-06-14
+ * https://github.com/julius-gun/piezopendulum
  */
 
-//  * @version V0.2 → platformIO refactoring, Raspberry Pico rp2040
 
 // #include <Arduino.h>
 // ------------------------------------------------------------------------------------------------------------------------------
@@ -17,12 +15,13 @@
 // ------------------------------------------------------------------------------------------------------------------------------
 #include "pico/stdlib.h"
 #include "hardware/irq.h" // might be needed to access lower-level interrupt functions
-#include "DFRobot_GDL.h" // official Display Library
-#include <DAC7571.h> // digital to analog converter library from https://github.com/jrj12591/DAC7571/
-// #include "src/DAC7571/DAC7571.h"
+#include "DFRobot_GDL.h"  // official Display Library
+// #include <DAC7571.h>      // digital to analog converter library from https://github.com/jrj12591/DAC7571/
+#include "src/DAC7571.h"
 #include <SD.h>
 #include <Wire.h>
 #include <SPI.h>
+#include <ButtonControl.h>
 // ------------------------------------------------------------------------------------------------------------------------------
 #define SYSTICK_FREQUENCY 133000000UL // 133MHz for RP2040
 // ------------------------------------------------------------------------------------------------------------------------------
@@ -37,7 +36,7 @@ DAC5571 dac;
 #define I2C_PORT i2c0
 const float VDD = 3.3; // Set the voltage that the DAC will run at
 // Voltage regulation
-float current_voltage;
+float currentVoltage;
 // ------------------------------------------------------------------------------------------------------------------------------
 // --- Define fixed variables ---------------------------------------------------------------------------------------------------
 // ------------------------------------------------------------------------------------------------------------------------------
@@ -53,7 +52,7 @@ float current_voltage;
 // Input pins definitions
 #define ENCODER_A 1
 #define ENCODER_B 0
-#define PUSH_BUTTON 3
+ButtonControl PUSH_BUTTON(3);
 #define HIT_IMPULSE 15 // Impulse detection
 // Output pins definitions
 #define LED_IMPULSE 4
@@ -92,33 +91,33 @@ float current_voltage;
 
 // define delays
 #define TIME_DELAY_MAIN_LOOP 1
-#define TIME_ENCODER_DELAY 700
-#define TIME_BUTTON_DELAY 400
-#define TIME_READY_DELAY 3500
+#define TIME_ENCODER_DELAY 500
+#define TIME_READY_DELAY 1500
 #define TIME_DELAY_INIT 500
 
 // Initialize the display using hardware SPI communication
 DFRobot_ST7789_240x320_HW_SPI screen(/*dc=*/TFT_DC, /*cs=*/TFT_CS, /*rst=*/TFT_RST);
 
 // Miscellaneous variables
-const int serialDebug = 1; // CHANGE TO 0 in normal mode. Do you want to see the debug messages? 1 = yes, 0 = no
+bool SERIAL_DEBUG = 0; // CHANGE TO 0 in normal mode. Do you want to see the debug messages? 1 = yes, 0 = no
+bool EXPERT_MODE = 0;  // CHANGE TO 0 in normal mode. Without it the delay finder function is disabled. 1 = yes, 0 = no
 int menuItemIndex = 0;     // Use this variable to store the current index of the menu
-int currentStateClock;     // Store the status of the clock pin (HIGH or LOW)
-int lastEncoderAClock;     // Store the PREVIOUS status of the clock pin (HIGH or LOW)
-int currentENCODER_B;
-int lastEncoderB;
-int buttonState = HIGH;            // Current state of the button
-unsigned long lastButtonState = 0; // Use this to store if the push button was pressed or not
-unsigned long lastEncoderUpdateTime = 0;
-unsigned long lastPushDebounceTime = 0;       // Last time the input pin was toggled
-const unsigned long PUSH_DEBOUNCE_DELAY = 50; // Debounce delay in milliseconds
+bool currentStateClock;    // Store the status of the clock pin (HIGH or LOW)
+bool lastEncoderA;         // Store the PREVIOUS status of the clock pin (HIGH or LOW)
+bool currentENCODER_B;
+bool lastEncoderB;
+bool buttonState = HIGH;  // Current state of the button
+bool lastButtonState = 0; // Use this to store if the push button was pressed or not
+unsigned int lastEncoderUpdateTime = 0;
+unsigned int lastPushDebounceTime = 0;       // Last time the input pin was toggled
+const unsigned int PUSH_DEBOUNCE_DELAY = 50; // Debounce delay in milliseconds
 
 // ------------------------------------------------------------------------------------------------------------------------------
 // --- Define menu items --------------------------------------------------------------------------------------------------------
 // ------------------------------------------------------------------------------------------------------------------------------
 // max Values
 #define MAX_MENU_ITEMS 7 // Number of menu items
-String MenuOptionsShort[MAX_MENU_ITEMS] = {
+String menuOptionsShort[MAX_MENU_ITEMS] = {
     "All functions",
     "Push",
     "Catch",
@@ -127,14 +126,15 @@ String MenuOptionsShort[MAX_MENU_ITEMS] = {
     "Resonance",
     "Resonance        after 2"};
 
-String MenuOptionsLong[MAX_MENU_ITEMS] = {
-    "All functions: cycle through all functions sequentially",
-    "Push the pendulum ball",
-    "Push and Catch after First Impulse",
-    "Push and Catch after Second Impulse",
-    "Push and Catch after Third Impulse",
-    "Resonance: Propels the ball upon immediate impulse detection",
-    "Resonance after Second Impulse: Projects the ball after the second impulse is detected"};
+// once a function is selected, the long description is displayed instead of the short one, filling the lower side of the screen
+String menuOptionsLong[MAX_MENU_ITEMS] = {
+    "Cycle Through all Functions   Sequentially",
+    "Push the     Pendulum Ball",
+    "Push and     Catch after First Impulse",
+    "Push and     Catch after      Second Impulse",
+    "Push and     Catch after      Third Impulse",
+    "Resonance:   Propels the Ball upon Immediate   Impulse Detection",
+    "Resonance 2: Propels the Ball upon Second      Impulse Detection"};
 // Resonance and catch after third
 
 // for 64V
@@ -142,45 +142,34 @@ String MenuOptionsLong[MAX_MENU_ITEMS] = {
 volatile unsigned int timerDelays[MAX_MENU_ITEMS] = {
     0, // Delay for "All functions"
     0, // Delay for "Push"
-    8, // Delay for "Catch"
-    5, // Delay for "Catch 2"
-    1, // Delay for "Catch 3"
+    4, // Delay for "Catch"
+    4, // Delay for "Catch 2"
+    0, // Delay for "Catch 3"
     0, // Delay for "Resonance"
     0  // Delay for "Resonance 2"
 };
-// int catchDelay1 = 8;
-// int catchDelay2 = 5;
-// int catchDelay3 = 1;
 
 String headline = "Select action:";
 
-String ready_string[2] = {
+String readyString[2] = {
     "execute",
     "ready"};
-int readyState = 1;
-int iLast_ButtonPushed = 0;
+unsigned int readyState = 1;
+unsigned int lastButtonPushed = 0;
 
 // Piezo variables
-volatile bool ball_detected = false;
-volatile int resonance_number = 0;
-
-// serial communication
-volatile bool newDataAvailable = false;
-String inputString;          // a String to hold incoming ENCODER_B
-bool stringComplete = false; // whether the string is complete
+volatile bool ballDetected = false;
 
 // LED impulse variables
-volatile bool led_on = false;
-volatile uint16_t led_on_time = 0;
+long ledOnTime = 0;
 
 // ------------------------------------------------------------------------------------------------------------------------------
 // --- Define functions ---------------------------------------------------------------------------------------------------------
 // ------------------------------------------------------------------------------------------------------------------------------
 
 // forward declarations for platformIO
-// input
-bool checkButtonPressed();
-int checkEncoderChanged();
+bool checkButtonPressed(); // Button handling
+int getEncoderPosition();
 void inputMethods();
 int changeMenuItem(int iChange);
 void displayClearSection(int x, int y, int width, int height); // Display functions
@@ -188,105 +177,96 @@ void displayMenuText();
 void displayReadyString();
 void displayVoltage();
 void chargePiezo(); // Piezofunctions
-void waitForBallImpacts(int number_of_repetitions);
+void waitForBallImpacts(int numberOfDetections);
 void interruptBallDetected();
 void ledImpulse();
-void performPiezoAction(int piezo_select);
+void performPiezoAction(int piezoSelect);
 void executePushAction();
 void executePushAndCatchAction(int bounceCount);
 void executeResonanceAction(int bounceCount);
-void printNumberBeingPlayed(int repetitionIndex);
 void handleSerialInput();
-void dischargePiezo(uint32_t time_to_stop_us);
-float checkVoltagePiezo(); // voltage
-void setVoltagePiezo(float V_want_piezo);
-void setupI2CDAC();// Setup helper functions
+void dischargePiezo(uint32_t timeToDischargePiezoMicroseconds);
+void chargeBootstrapCapacitor(uint32_t timeToChargeCapacitorMicroseconds);
+float readVoltagePiezo(); // voltage
+void setPiezoActuatorVoltage(float voltage);
+void setupI2CDAC(); // Setup helper functions
 void setupGatedriver();
 void setupEncoder();
 void setupInterrupts();
 void setupScreen();
 
 // ------------------------------------------------------------------------------------------------------------------------------
-
+bool longPressActive = false;
 /**
  * Checks if the button is pressed and returns a value indicating the button state, with debouncing.
  *
  * @return true if the button is pressed, false otherwise.
  */
+int LONG_PRESS_DELAY = 1000;
 bool checkButtonPressed()
 {
-  // Read the state of the switch/button into a local variable:
-  int reading = digitalRead(PUSH_BUTTON);
-
-  // Check if the button state has changed
-  if (reading != lastButtonState)
+  if (PUSH_BUTTON.longClick())
   {
-    // reset the debouncing timer
-    lastPushDebounceTime = millis();
-  }
-
-  if ((millis() - lastPushDebounceTime) > PUSH_DEBOUNCE_DELAY)
-  {
-    // whatever the reading is at, it's been there for longer than the debounce
-    // delay, so take it as the actual current state:
-
-    // if the button state has changed:
-    if (reading != buttonState)
+    int commandToExecute = menuItemIndex + 1;
+    if (commandToExecute > 2 && commandToExecute < 6)
     {
-      buttonState = reading;
-
-      // only toggle if the new button state is LOW (button pressed)
-      if (buttonState == LOW)
+      if (PUSH_BUTTON.getLongClickTime() > LONG_PRESS_DELAY) // press button for 1s to start delay function
       {
-        // Button has been pressed
+        longPressActive = true;
+        return false;
+      }
+      else
+      {
+        longPressActive = false;
         return true;
       }
     }
+    else
+    {
+      longPressActive = false;
+      return true;
+    }
   }
-
-  // Save the reading. Next time through the loop, it'll be the lastButtonState
-  lastButtonState = reading;
-  return false;
+  else
+  {
+    return false;
+  }
 }
+
 // variables for the encoder
-const int ENCODER_NO_CHANGE = -1;
-const int ENCODER_COUNTER_CLOCKWISE = -1;
-const int ENCODER_CLOCKWISE = 1;
+const int ENCODER_COUNTER_CLOCKWISE = -1; // ↺ Counter clockwise rotation
+const int ENCODER_NO_CHANGE = 0;
+const int ENCODER_CLOCKWISE = 1; // ↻ Clockwise rotation
 
 // Function to check if encoder has changed
-int checkEncoderChanged()
+int getEncoderPosition()
 {
   int changeValue = ENCODER_NO_CHANGE; // Default to no change
   unsigned long currentEncoderTime = millis();
 
   // Read the current state of the encoder pins
-  int currentEncoderAClock = digitalRead(ENCODER_A);
+  int currentEncoderA = digitalRead(ENCODER_A);
   int currentEncoderB = digitalRead(ENCODER_B);
 
   // Check if there has been any change in the state of the encoder pins
-  if (lastEncoderAClock != currentEncoderAClock || lastEncoderB != currentEncoderB)
+  if (lastEncoderA != currentEncoderA || lastEncoderB != currentEncoderB)
   {
     if (currentEncoderTime > (lastEncoderUpdateTime + TIME_ENCODER_DELAY))
     {
       // Check the transition of state to determine direction
-      if (((currentEncoderAClock == 1 && currentEncoderB == 0) && (lastEncoderAClock == 0 && lastEncoderB == 0)) || ((currentEncoderAClock == 1 && currentEncoderB == 1) && (lastEncoderAClock == 1 && lastEncoderB == 0)) || ((currentEncoderAClock == 0 && currentEncoderB == 1) && (lastEncoderAClock == 1 && lastEncoderB == 1)) || ((currentEncoderAClock == 0 && currentEncoderB == 0) && (lastEncoderAClock == 0 && lastEncoderB == 1)))
+      if (((currentEncoderA == 1 && currentEncoderB == 0) && (lastEncoderA == 0 && lastEncoderB == 0)) || ((currentEncoderA == 1 && currentEncoderB == 1) && (lastEncoderA == 1 && lastEncoderB == 0)) || ((currentEncoderA == 0 && currentEncoderB == 1) && (lastEncoderA == 1 && lastEncoderB == 1)) || ((currentEncoderA == 0 && currentEncoderB == 0) && (lastEncoderA == 0 && lastEncoderB == 1)))
       {
-        changeValue = changeMenuItem(ENCODER_COUNTER_CLOCKWISE); // Counter clockwise rotation
+        changeValue = ENCODER_COUNTER_CLOCKWISE; // ↺ Counter clockwise rotation
       }
-      else if (((currentEncoderAClock == 0 && currentEncoderB == 1) && (lastEncoderAClock == 0 && lastEncoderB == 0)) || ((currentEncoderAClock == 1 && currentEncoderB == 1) && (lastEncoderAClock == 0 && lastEncoderB == 1)) || ((currentEncoderAClock == 1 && currentEncoderB == 0) && (lastEncoderAClock == 1 && lastEncoderB == 1)) || ((currentEncoderAClock == 0 && currentEncoderB == 0) && (lastEncoderAClock == 1 && lastEncoderB == 0)))
+      else if (((currentEncoderA == 0 && currentEncoderB == 1) && (lastEncoderA == 0 && lastEncoderB == 0)) || ((currentEncoderA == 1 && currentEncoderB == 1) && (lastEncoderA == 0 && lastEncoderB == 1)) || ((currentEncoderA == 1 && currentEncoderB == 0) && (lastEncoderA == 1 && lastEncoderB == 1)) || ((currentEncoderA == 0 && currentEncoderB == 0) && (lastEncoderA == 1 && lastEncoderB == 0)))
       {
-        changeValue = changeMenuItem(ENCODER_CLOCKWISE); // Clockwise rotation
+        changeValue = ENCODER_CLOCKWISE; // ↻ Clockwise rotation
       }
-
-      // Update the last state
 
       // If a valid item change has occurred, update the time
-      if (changeValue != ENCODER_NO_CHANGE)
-      {
-        lastEncoderUpdateTime = millis();
-      }
+      lastEncoderUpdateTime = millis();
     }
-    lastEncoderAClock = currentEncoderAClock;
+    lastEncoderA = currentEncoderA;
     lastEncoderB = currentEncoderB;
   }
 
@@ -295,61 +275,68 @@ int checkEncoderChanged()
 
 int changeMenuItem(int step)
 {
-  menuItemIndex = menuItemIndex + step;
+  menuItemIndex += step;
   if (menuItemIndex >= MAX_MENU_ITEMS)
   {
-    menuItemIndex = MAX_MENU_ITEMS - 1; // 0;
-    return -1;
+    menuItemIndex = MAX_MENU_ITEMS - 1;
   }
-  if (menuItemIndex < 0)
+  else if (menuItemIndex < 0)
   {
-    menuItemIndex = 0; // MAX_PIEZO_MODES-1;
-    return -1;
+    menuItemIndex = 0;
   }
-  return menuItemIndex;
+  return menuItemIndex; // Return the updated menu item index.
 }
 
 void inputMethods()
 {
-  int iNew_ButtonPushed = millis();
-  if (iNew_ButtonPushed > iLast_ButtonPushed + TIME_READY_DELAY && readyState != 1)
+  // Check for encoder rotation
+  int encoderChange = getEncoderPosition();
+  if (encoderChange != ENCODER_NO_CHANGE)
+  {
+    changeMenuItem(encoderChange);
+    displayMenuText();
+  }
+
+  // Check for button press
+  int newButtonPushed = millis();
+  if (newButtonPushed > lastButtonPushed + TIME_READY_DELAY && readyState != 1)
   {
     readyState = 1;
     displayReadyString();
   }
   else if (checkButtonPressed() == 1)
   {
-    if (iNew_ButtonPushed > iLast_ButtonPushed + TIME_READY_DELAY)
+    if (newButtonPushed > lastButtonPushed + TIME_READY_DELAY)
     {
-      iLast_ButtonPushed = iNew_ButtonPushed;
+      lastButtonPushed = newButtonPushed;
       readyState = 0;
       displayReadyString();
     }
   }
-  if (checkEncoderChanged() != -1)
-  {
-    displayMenuText();
-  }
-
   // Execute the selected action
   if (readyState == 0) // Condition met when execute button clicked
   {
     menuSelectAction();
+  }
+  if (longPressActive && EXPERT_MODE) 
+  {
+    delayTimeHelper();
   }
 }
 
 void menuSelectAction()
 {
   int commandToExecute = menuItemIndex + 1; // Menu item index matches performPiezoAction case
-  if (serialDebug)
+  if (SERIAL_DEBUG)
   {
     Serial.print("Piezo command selected: ");
-    Serial.println(MenuOptionsShort[menuItemIndex]); // Print the string
+    Serial.println(menuOptionsShort[menuItemIndex]); // Print the string
   }
   delay(500);                           // Delay so that the push button does not cause the ball to not be in the right position
-  ball_detected = false;                // if the push button caused the interrupt to be triggered, falsify it again
+  ballDetected = false;                 // if the push button caused the interrupt to be triggered, falsify it again
   performPiezoAction(commandToExecute); // menuItemIndex starts at 0, and case 1 is "Push"
   readyState = 1;                       // Reset the ready flag to prevent repeated command execution without button presses
+  displayMenuText();                    // Update the display to show the Menu text
   displayReadyString();                 // Update the display to show the change in state
   displayVoltage();
 }
@@ -393,38 +380,31 @@ void displayMenuText()
     screen.setTextSize(TEXT_SIZE);
 
     // Print the menu index and option
-    screen.println(String(menuIndex + 1) + " - " + MenuOptionsShort[menuIndex]);
+    screen.println(String(menuIndex + 1) + " - " + menuOptionsShort[menuIndex]);
   }
 
-  // Print the header at the top
-  screen.setCursor(STARTING_X, STARTING_Y_HEAD);
-  screen.setTextColor(COLOR_GREY);
-  screen.setTextSize(TEXT_SIZE);
-  screen.println(headline);
   ledImpulse();
 }
 
-//instead of displayMenuText the full function name is displayed for comprehension
-void displayCurrentFunction()
+// instead of displayMenuText the full function name is displayed for comprehension
+void displayCurrentFunctionDescription()
 {
-  // Clear the menu area before displaying the new text
   displayClearSection(STARTING_X, STARTING_Y_MODES, screen.width(), SCREEN_CLC_MODES_HEIGHT);
-
-    // Set cursor position
-    screen.setCursor(STARTING_X, 120);
-
-    // Set the text color: highlight the current menu item, otherwise use the default color
-    uint16_t color = (offset == 0) ? COLOR_MIMED_YELLOW : FONT_COLOR_HEADLINES;
-    screen.setTextColor(color);
-
-    // Set the text size for uniformity
-    screen.setTextSize(TEXT_SIZE);
-
-  // Print the header at the top
-  screen.setCursor(STARTING_X, STARTING_Y_HEAD);
-  screen.setTextColor(COLOR_GREY);
+  screen.setCursor(STARTING_X, STARTING_Y_MODES);
+  screen.setTextColor(COLOR_MIMED_YELLOW);
   screen.setTextSize(TEXT_SIZE);
-  screen.println(headline);
+  screen.println(String(menuItemIndex + 1) + " - " + menuOptionsLong[menuItemIndex]);
+  ledImpulse();
+}
+
+// instead of displayMenuText the full function name is displayed for comprehension
+void displayDelayHelperText()
+{
+  displayClearSection(STARTING_X, 200, screen.width(), 40);
+  screen.setCursor(STARTING_X, 220);
+  screen.setTextColor(COLOR_MIMED_YELLOW);
+  screen.setTextSize(TEXT_SIZE);
+  screen.println("Set delay time");
   ledImpulse();
 }
 
@@ -432,19 +412,19 @@ void displayReadyString()
 {
   ledImpulse();
   // Calculate the dimensions needed for the text based on text length and size
-  int text_length = ready_string[readyState].length();
-  int text_width = CHARACTER_WIDTH * text_length * 1.4; // Width of entire text string
-  int text_height = CHARACTER_HEIGHT;                   // Height of text string
+  int textLength = readyString[readyState].length();
+  int textWidth = CHARACTER_WIDTH * textLength * 1.4; // Width of entire text string
+  int textHeight = CHARACTER_HEIGHT;                  // Height of text string
 
   // Calculate starting X so the text is horizontally centered
-  int text_x = STARTING_X;
-  int text_y = STARTING_Y_READY - (text_height / 2); // Adjust Y so the text is vertically centered
+  int textX = STARTING_X;
+  int textY = STARTING_Y_READY - (textHeight / 2); // Adjust Y so the text is vertically centered
 
   // Clear the rectangle area where the ready string will be displayed
-  displayClearSection(text_x, text_y, text_width, text_height);
+  displayClearSection(textX, textY, textWidth, textHeight);
 
   // Set the cursor to the calculated starting position for the ready string
-  screen.setCursor(text_x, text_y);
+  screen.setCursor(textX, textY);
   // Set the text color depending on the state of readyState
   if (readyState == 0)
   {
@@ -456,10 +436,10 @@ void displayReadyString()
   }
   // Set the text size and print the string
   screen.setTextSize(TEXT_SIZE);
-  screen.println(ready_string[readyState]);
+  screen.println(readyString[readyState]);
   if (readyState == 0)
   {
-    if (serialDebug)
+    if (SERIAL_DEBUG)
     {
       displayTimeMicroseconds();
     }
@@ -470,34 +450,66 @@ void displayReadyString()
   }
 }
 
+void displayHeader(String headerText)
+{
+  displayClearSection(STARTING_X, STARTING_Y_HEAD, screen.width(), CHARACTER_HEIGHT);
+  screen.setCursor(STARTING_X, STARTING_Y_HEAD);
+  screen.setTextColor(COLOR_BLACK);
+  screen.setTextSize(TEXT_SIZE);
+  screen.println(headerText);
+}
+
 void displayVoltage()
 {
-  current_voltage = (int)checkVoltagePiezo();
-  int text_width = 300; // Width of entire text string
-  int text_x = 245;
-  int text_y = STARTING_Y_READY - (CHARACTER_HEIGHT / 2);
-  screen.setCursor(text_x, STARTING_Y_READY - (CHARACTER_HEIGHT / 2));
+  currentVoltage = (int)readVoltagePiezo();
+  int textWidth = 300; // Width of entire text string
+  int textX = 245;
+  int textY = STARTING_Y_READY - (CHARACTER_HEIGHT / 2);
+  screen.setCursor(textX, STARTING_Y_READY - (CHARACTER_HEIGHT / 2));
   screen.setTextColor(COLOR_TUM_BLUE);
   screen.setTextSize(TEXT_SIZE);
   // Clear the rectangle area where the ready string will be displayed
-  displayClearSection(140, text_y, text_width, CHARACTER_HEIGHT);
-  screen.print(current_voltage, 0);
+  displayClearSection(140, textY, textWidth, CHARACTER_HEIGHT);
+  screen.print(currentVoltage, 0);
   screen.print("V");
 }
 
 void displayTimeMicroseconds()
 {
-  int text_x = 145;
-  int text_y = STARTING_Y_READY - (CHARACTER_HEIGHT / 2);
-  screen.setCursor(text_x, STARTING_Y_READY - (CHARACTER_HEIGHT / 2));
+  int textX = 140;
+  int textY = STARTING_Y_READY - (CHARACTER_HEIGHT / 2);
+  displayClearSection(textX, textY, 200, CHARACTER_HEIGHT);
+  int charHeight = CHARACTER_HEIGHT;
+  screen.setTextSize(TEXT_SIZE - 1);
+  screen.setCursor(textX, STARTING_Y_READY - (charHeight / 2));
   screen.setTextColor(COLOR_TUM_BLUE);
-  screen.setTextSize(TEXT_SIZE);
-  // Clear the rectangle area where the ready string will be displayed
-  displayClearSection(text_x, text_y, 200, CHARACTER_HEIGHT);
   int timeDelay = timerDelays[menuItemIndex];
-  screen.print("delay:");
+  screen.print("delay: ");
   screen.print(timeDelay);
   screen.print("us");
+}
+
+// --- Piezo functions ------------------------------------------------------------------------------------------
+
+/*in a bootstrap configuration, the low side MOSFET (Q2) is turned on to discharge
+the piezo and charge the bootstrap capacitor, so that the piezo can be charged
+again. The bootstrap capacitor looses its charge over time, so it needs to be
+recharged before switching the high side MOSFET (Q1)*/
+
+void chargeBootstrapCapacitorFast()
+{
+  delayMicroseconds(1); // → never comment this, this is shoot through delay time
+  digitalWrite(GATE_DRIVE_LIN, HIGH);
+  digitalWrite(GATE_DRIVE_LIN, LOW);
+}
+void chargeBootstrapCapacitor(uint32_t timeToChargeCapacitorMicroseconds)
+{
+  delayMicroseconds(1); // → never comment this, this is shoot through delay time
+  digitalWrite(GATE_DRIVE_LIN, HIGH);
+  // delayMicroseconds(timeToChargeCapacitorMicroseconds);
+  delayMicroseconds(30);
+  digitalWrite(GATE_DRIVE_LIN, LOW);
+  delayMicroseconds(10);
 }
 
 /**
@@ -505,143 +517,141 @@ void displayTimeMicroseconds()
  */
 void chargePiezo()
 {
-  digitalWrite(GATE_DRIVE_LIN, HIGH); // charge bootstrap capacitor
-  delayMicroseconds(30);              // todo: optimize time
-  digitalWrite(GATE_DRIVE_LIN, LOW);
-  delayMicroseconds(10);
   digitalWrite(GATE_DRIVE_HIN, HIGH); // SHOOT: Turn on higher side MOSFET (Q1)
   delayMicroseconds(100);             // todo: optimize time
   digitalWrite(GATE_DRIVE_HIN, LOW);  // Turn off higher side MOSFET (Q1)
-  delay(25);                          // todo: how long does it take to charge the capacitor? + 10%
-  // ball_detected = false;              // Reset ball_detected for the next detection, so that it does not automatically jumps a step in the while loop
+  delay(25);                          // now: 50ms todo: how long does it take to charge the capacitor? + 10%
 }
 
-int MAXIMUM_TIME_WAITING = 5000000; // s
-int piezo_on_time;
-// volatile uint32_t time_to_release_nanosec = 5385; // time in ns This will hold the time to stop piezo, adjustable via encoder
-volatile int number_of_repetitions = 1;
-
-void waitForBallImpacts(int number_of_repetitions)
+unsigned int DISCHARGE_PIEZO_TIME = 30; // this time needs to be adjusted according to the piezo
+void dischargePiezo(uint32_t timeToDischargePiezoMicroseconds)
 {
-  unsigned int startTime = micros();
-  int numberBouncesDetected = 0;
-  while (numberBouncesDetected <= number_of_repetitions)
-  {
-    // Timeout check
-    if (micros() - startTime > MAXIMUM_TIME_WAITING)
-    {
-      break; // Exit the loop
-    }
-    if (ball_detected)
-    {
-      numberBouncesDetected++;
-      ball_detected = false; // Reset ball_detected for the next detection
-    }
-
-    // Non-blocking delay check
-    // if (micros() - previousTime >= 10)
-    // {                          // Check if 10 microseconds have passed
-    //   previousTime = micros(); // Reset the timer
-    //                            // ledImpulse(); // Uncomment this if you wish to trigger an LED impulse
-    // }
-  }
-}
-
-unsigned long lastDetectionTime = 0;      // Tracks the time since the last detection
-const unsigned long debounceDelay = 3000; // Debounce delay in microseconds
-
-void resonancePiezo(int number_of_repititions)
-{
-  int number_detected = 0;
-  unsigned int startTime = micros();
-  unsigned long previousTime = micros();
-
-  // The variable 'previousTime' is used for non-blocking delay
-  while (number_detected <= number_of_repititions)
-  {
-    if (micros() - startTime > MAXIMUM_TIME_WAITING)
-    {
-      break; // Exit the loop
-    }
-    if (ball_detected && (micros() - lastDetectionTime >= debounceDelay))
-    {
-      number_detected++;
-      ball_detected = false;        // Reset ball_detected for the next detection
-      lastDetectionTime = micros(); // Update the last detection time
-    }
-  }
-}
-
-void dischargePiezo(uint32_t time_to_stop_us)
-{
-  delayMicroseconds(time_to_stop_us);
+  delayMicroseconds(1); // → never comment this, this is shoot through delay time
+  delayMicroseconds(timeToDischargePiezoMicroseconds);
   digitalWrite(GATE_DRIVE_LIN, HIGH);
-  delayMicroseconds(10);
+  delayMicroseconds(DISCHARGE_PIEZO_TIME);
   digitalWrite(GATE_DRIVE_LIN, LOW);
 }
 
-volatile unsigned long lastImpulseDebounceTime = 0; // Timestamp of the last time the ISR was triggered
-const long impulseDebounceDelay = 8;                // Debounce time in milliseconds
-volatile bool resonanceMode = false;                // Flag to indicate if the resonance mode is active
+volatile int NUMBER_OF_PIEZO_REPETITIONS = 1; // Number of times a selected function in the menu is repeated
+int MAXIMUM_TIME_WAITING_FOR_BALL = 1500000;  // microseconds → 1.5 seconds
+int piezoOnTime;
+
+void waitForBallImpacts(int numberOfDetections)
+{
+  unsigned int startTime = micros();
+  ballDetected = false; // Reset the ballDetected flag
+  int numberBouncesDetected = 0;
+  while (numberBouncesDetected < numberOfDetections)
+  {
+    // Timeout check
+    if (micros() - startTime > MAXIMUM_TIME_WAITING_FOR_BALL)
+    {
+      break; // Exit the loop
+    }
+    if (ballDetected)
+    {
+      numberBouncesDetected++;
+      ballDetected = false; // Reset ballDetected for the next detection
+    }
+  }
+}
+
+void enablePiezoInterrupt() // Enable the interrupts for the ball detection pin
+
+{
+  attachInterrupt(digitalPinToInterrupt(HIT_IMPULSE), interruptBallDetected, RISING);
+}
+
+// void disablePiezoInterrupt() // Disable the interrupts for the ball detection pin → rather not use this function because it takes too long to reenable the interrupt
+// {
+//   // Disable the interrupts for the ball detection pin
+//   detachInterrupt(digitalPinToInterrupt(HIT_IMPULSE));
+// }
+
+// unsigned long lastDetectionTime = 0;                // Tracks the time since the last detection
+volatile unsigned int lastImpulseDebounceTime = 0; // Timestamp of the last time the ISR was triggered
 
 // Interrupt Service Routine (ISR) for the ball detected pin
+volatile int ballDetectedNumber = 0;
+volatile bool resonanceMode = false;             // Flag to indicate if the resonance mode is active
+const uint16_t IMPULSE_DEBOUNCE_DELAY_CATCH = 4; // Debounce delay for resonance in milliseconds
+
 void interruptBallDetected()
 {
-  // // Check if enough time has passed since the last detected interrupt (debouncing)
-  if ((millis() - lastImpulseDebounceTime) > impulseDebounceDelay)
+  // Check if enough time has passed since the last detected interrupt (debouncing)
+  if ((millis() - lastImpulseDebounceTime) > IMPULSE_DEBOUNCE_DELAY_CATCH)
   {
-    ball_detected = true;
-    // led_on = true;
-    // digitalWrite(LED_IMPULSE, HIGH); // Turn on the LED
-    // led_on_time = millis();
-
-    // if (serialDebug)
-    // {
-    //   Serial.println("Ball detected!");
-    // }
-
+    ballDetected = true;
+    digitalWrite(LED_IMPULSE, HIGH); // Turn on the LED
+    ledOnTime = millis();            // Set the time the LED was turned on
     // Update the lastImpulseDebounceTime to the current time
     lastImpulseDebounceTime = millis();
   }
-  if (resonanceMode)
-  {
-    ball_detected = true;
-    // digitalWrite(LED_IMPULSE, HIGH); // Turn on the built-in LED
-    led_on = true;
-    led_on_time = millis(); // perhaps to slow
-  }
 }
 
+int LED_ON_TIME = 500;
 // Function to handle the LED impulse
 void ledImpulse()
 {
-  if (led_on)
+  if (digitalRead(LED_IMPULSE))
   {
-    // Turn on the LED only if it is not already on
-    if (!digitalRead(LED_IMPULSE))
-    {
-      digitalWrite(LED_IMPULSE, HIGH); // Turn on the LED
-    }
-
-    // Check if 600ms passed since the LED was turned on
-    if (millis() - led_on_time > 600)
+    // Check if time passed since the LED was turned on
+    if (millis() - ledOnTime > LED_ON_TIME)
     {
       digitalWrite(LED_IMPULSE, LOW); // Turn off the LED
-      led_on = false;                 // Clear the led_on flag
-      ball_detected = false;          // Reset the ball_detected flag
     }
   }
 }
+
+unsigned int CHARGE_BOOTSTRAP_CAP_TIME_MICROSECONDS = 300;
 void executePushAction()
 {
-  for (int repetitionIndex = 0; repetitionIndex < number_of_repetitions; repetitionIndex++)
+  for (int repetitionIndex = 0; repetitionIndex < NUMBER_OF_PIEZO_REPETITIONS; repetitionIndex++)
   {
+
+    chargeBootstrapCapacitor(CHARGE_BOOTSTRAP_CAP_TIME_MICROSECONDS);
     chargePiezo();
     delay(100);
     dischargePiezo(0);
-    delay(1200);
-    printNumberBeingPlayed(repetitionIndex);
+    ledImpulse();
+    delay(500);
+    ledImpulse();
   }
+}
+
+void executePushAndCatchAction(int bounceCount)
+{
+  int timeToDischargePiezoMicroseconds = timerDelays[bounceCount + 1];
+  for (int repetitionIndex = 0; repetitionIndex < NUMBER_OF_PIEZO_REPETITIONS; repetitionIndex++)
+  {
+    delay(500);
+    chargeBootstrapCapacitor(CHARGE_BOOTSTRAP_CAP_TIME_MICROSECONDS);
+    chargePiezo(); // Shoot the ball away
+    waitForBallImpacts(bounceCount);
+    dischargePiezo(timeToDischargePiezoMicroseconds); // Catch the ball bounce-free
+    ledImpulse();
+    delay(800);
+    ledImpulse();
+  }
+}
+
+int NUMBER_OF_BALL_REPETITIONS_RESONANCE = 8;
+int chargeBootstrapCapacitorTime = 13;
+void executeResonanceAction(int bounceCount)
+{
+  delay(500);
+  resonanceMode = true;
+  for (int repetitionIndex = 0; repetitionIndex < NUMBER_OF_BALL_REPETITIONS_RESONANCE; repetitionIndex++)
+  {
+    chargeBootstrapCapacitor(chargeBootstrapCapacitorTime);
+    chargePiezo(); // Shoot the ball away
+    waitForBallImpacts(bounceCount);
+    dischargePiezo(0); // Shoot the ball again, this time higher then before
+    ledImpulse();
+    chargeBootstrapCapacitorTime += 2; // Increase the charge time for the bootstrap capacitor so that the ball flies higher each following bounce
+  }
+  resonanceMode = false;
 }
 
 void executeAllPiezoActions()
@@ -651,10 +661,11 @@ void executeAllPiezoActions()
   displayReadyString(); // Update the display to show the change in state
   for (int currentMenuIndex = 2; currentMenuIndex < MAX_MENU_ITEMS + 1; currentMenuIndex++)
   {
-    // performPiezoAction(currentMenuIndex);
-    // delay(500);
     menuItemIndex = currentMenuIndex - 1;
-    displayMenuText();                    // Update the display to show the change in state
+    if (SERIAL_DEBUG)
+    {
+      displayTimeMicroseconds();
+    }
     performPiezoAction(currentMenuIndex); // menuItemIndex starts at 0, and case 1 is "Push"
     delay(800);
   }
@@ -664,43 +675,14 @@ void executeAllPiezoActions()
   displayMenuText();    // Update the display to show the first menu item
 }
 
-void executePushAndCatchAction(int bounceCount)
+void performPiezoAction(int piezoSelect)
 {
-  Serial.print("Bounce count in executePushAndCatchAction: "); // Print the text
-  Serial.println(bounceCount);                                 // Print the variable
-  Serial.print("timerDelays[bounceCount+1]: ");                // Print the text
-  Serial.println(timerDelays[bounceCount + 1]);                // Print the variable
-
-  for (int repetitionIndex = 0; repetitionIndex < number_of_repetitions; repetitionIndex++)
-  {
-    chargePiezo();
-    waitForBallImpacts(bounceCount);
-    dischargePiezo(timerDelays[bounceCount + 1]);
-    delay(1600);
-    printNumberBeingPlayed(repetitionIndex);
-    ledImpulse();
-  }
-}
-
-void executeResonanceAction(int bounceCount)
-{
-  for (int repetitionIndex = 0; repetitionIndex < 7; repetitionIndex++)
-  {
-    chargePiezo();
-    // waitForBallImpacts(bounceCount);
-    resonancePiezo(bounceCount);
-    dischargePiezo(0);
-
-    // printNumberBeingPlayed(repetitionIndex);
-  }
-}
-
-void performPiezoAction(int piezo_select)
-{
+  displayCurrentFunctionDescription(); // Update the display to show the long description of the selected function
+  ledImpulse();
   // Log the selected command if serial debug is enabled
-  delay(500);
+  delay(700); // Delay to show description
   // Execute action based on the selected command
-  switch (piezo_select)
+  switch (piezoSelect)
   {
   case 1: // "All functions" - Perform all actions in sequence
     executeAllPiezoActions();
@@ -736,15 +718,6 @@ void performPiezoAction(int piezo_select)
   }
 }
 
-void printNumberBeingPlayed(int repetitionIndex)
-{
-  if (serialDebug)
-  {
-    // Serial.print("Number being played: "); // Print the text
-    // Serial.println(repetitionIndex + 1);   // Print the variable
-  }
-}
-
 /**
  * @brief Checks the voltage of the piezo sensor.
  *
@@ -754,11 +727,10 @@ void printNumberBeingPlayed(int repetitionIndex)
  * @return The voltage of the piezo sensor.
  */
 
-float checkVoltagePiezo()
+float readVoltagePiezo()
 {
   int current_voltage = analogRead(V_MEASURE);
   delay(10);
-  // current_voltage = analogRead(V_MEASURE) / 4095 * VDD * 46.454;
   current_voltage *= 0.0374; // Voltage divider equals to: analogRead(V_MEASURE) * (2200 + 100000) / 2200
   return current_voltage;
 }
@@ -766,20 +738,20 @@ float checkVoltagePiezo()
 /**
  * Sets the voltage for the piezo.
  *
- * @param V_want_piezo The desired voltage for the piezo.
+ * @param voltage The desired voltage for the piezo.
  */
-void setVoltagePiezo(float V_want_piezo)
+void setPiezoActuatorVoltage(float voltage)
 {
-  if (V_want_piezo > 100) // max voltage
+  if (voltage > 100) // max voltage
   {
-    V_want_piezo = 100;
+    voltage = 100;
   }
-  else if (V_want_piezo < 50) // min voltage
+  else if (voltage < 50) // min voltage
   {
-    V_want_piezo = 50;
+    voltage = 50;
   }
   float slope = 21.25; // 85/4 = 21.25; 85 V output per 4 V input
-  float V_send_i2c = (V_want_piezo - 50) / slope;
+  float V_send_i2c = (voltage - 50) / slope;
   V_send_i2c = V_send_i2c / .71304; // Voltage divider equals to 82e3 / (82e3 + 33e3)
   // Serial.println(V_send_i2c);
   // Set the voltage to the piezo V_P
@@ -787,99 +759,156 @@ void setVoltagePiezo(float V_want_piezo)
   delay(20); // Small delay to allow DAC to settle
 }
 
-void handleSerialInput()
+unsigned long DELAY_HELPER_INTERVAL_TIMER = 1000; // Desired interval in which a new value can be set
+// Function to help to find the optimal delay time for executePushAndCatchAction()
+void delayTimeHelper()
 {
-  if (Serial.available())
+  readyState = 1;        // Reset the ready flag
+  displayReadyString();  // Update the display to show state change
+  int encoderChange = 0; // Variable to store the encoder change value
+  String delayHelpHeadline = "Turn to set delay";
+  String delayIncreasingHeadline = "Delay Up";
+  String delayDecreasingHeadline = "Delay Down";
+  displayHeader(delayHelpHeadline);
+  int commandToExecute = menuItemIndex + 1; // Menu item index matches performPiezoAction case
+  int lastEncoderPosition = 0;
+  int currentEncoderPosition; // Function to get current encoder position
+  delay(500);                 // Delay to prevent accidental rotation of encoder
+  while (longPressActive)
   {
-    // Get the new byte:
-    char inChar = (char)Serial.read();
-    // Add it to the inputString:
-    inputString += inChar;
-    // If the incoming character is a newline, set a flag so the main loop can process it
-    if (inChar == '\n')
+    readyState = 0;
+    displayReadyString(); // Update the display to show the change in state
+    performPiezoAction(commandToExecute);
+    readyState = 1;       // Reset the ready flag to prevent repeated command execution without button presses
+    displayReadyString(); // Update the display to show the change in state
+    displayTimeMicroseconds();
+    // Use a flag to determine if the interval has finished
+    bool intervalHasFinished = false;
+    unsigned long previousTimer = millis(); // Start time for the interval
+    int lastTimerDelay;
+    int currentTimerDelay;
+    lastTimerDelay = timerDelays[menuItemIndex];
+    // Loop until the encoder is changed or the interval has elapsed, or the button is pressed
+    while (!intervalHasFinished)
     {
-      stringComplete = true;
-    }
-  }
 
-  if (stringComplete)
-  {
-    // Trim the input string to remove whitespace and the line ending
-    inputString.trim();
+      unsigned long currentTimer = millis();
+      // Check for encoder changes
+      currentEncoderPosition = getEncoderPosition();
+      if (currentEncoderPosition != ENCODER_NO_CHANGE && timerDelays[menuItemIndex] >= 0)
+      {
+        timerDelays[menuItemIndex] += currentEncoderPosition; // Adjust the delay time
+        displayTimeMicroseconds();                            // Update the display to show the new delay time
+      }
+      if (lastEncoderPosition != currentEncoderPosition && currentEncoderPosition != ENCODER_NO_CHANGE) // If change happened
+      {
+        lastEncoderPosition = currentEncoderPosition; // Update the last accounted position
+      }
+      else if (currentEncoderPosition == ENCODER_NO_CHANGE)
+      {
+        currentEncoderPosition = lastEncoderPosition; // If no change, set the current position to the last position
+      }
 
-    // Convert the string to a float
-    float newValue = inputString.toInt();
-
-    // Check if the float conversion has returned a non-zero value or the input string is "0"
-    if (newValue != 0 || inputString == "0")
+      // Exit the loop
+      if (PUSH_BUTTON.click() == 1)
+      {
+        longPressActive = false;
+        break;
+      }
+      if (currentTimer - previousTimer > DELAY_HELPER_INTERVAL_TIMER)
+      {
+        intervalHasFinished = true;
+      }
+    } // End of inner while loop for adjusting delay time
+      // lastTimerDelay != timerDelays[menuItemIndex]
+    if (lastTimerDelay != timerDelays[menuItemIndex] + 1 || lastTimerDelay != timerDelays[menuItemIndex] - 1)
     {
-      // Assign the new value to time_to_release_nanosec
-      timerDelays[menuItemIndex] = newValue;
-      Serial.println("New " + MenuOptionsShort[menuItemIndex] + " value set: " + inputString);
+      if (currentEncoderPosition > 0) // Increase the value
+      {
+        displayHeader(delayIncreasingHeadline);
+        timerDelays[menuItemIndex] += 1;
+      }
+      else // Decrease the value
+      {
+        displayHeader(delayDecreasingHeadline);
+        if (timerDelays[menuItemIndex] >= 1)
+        {
+          timerDelays[menuItemIndex] -= 1;
+        }
+        else
+        {
+          timerDelays[menuItemIndex] = 0;
+          longPressActive = false;
+          break;
+        }
+      }
     }
     else
     {
-      Serial.println("Invalid input");
+      displayHeader(delayHelpHeadline); // Update the display to show the help text
     }
-
-    // Clear the string for new input and reset the complete flag
-    inputString = "";
-    stringComplete = false;
-  }
+  } // End of the main while loop that continually allows for delay time adjustments
+  readyState = 1;          // "ready" state
+  displayReadyString();    // Update the display to show "ready" state
+  displayMenuText();       // Update the display for the menu
+  displayHeader(headline); // Print the header at the top
 }
 
 void setupPins()
 {
-  // Initialize LED's as output
-  pinMode(LED_BUILTIN, OUTPUT);
+  PUSH_BUTTON.setMinLongClickTime(100); // Set the minimum time for a long click in milliseconds
+  pinMode(LED_BUILTIN, OUTPUT);         // Initialize LED's as output
   pinMode(LED_BUILTIN, OUTPUT);
   digitalWrite(LED_BUILTIN, HIGH);
   pinMode(LED_IMPULSE, OUTPUT);
   pinMode(LED_POWER, OUTPUT);
-  pinMode(PUSH_BUTTON, INPUT_PULLUP);
+  digitalWrite(LED_POWER, HIGH);
   pinMode(HIT_IMPULSE, INPUT_PULLUP);
-  attachInterrupt(digitalPinToInterrupt(HIT_IMPULSE), interruptBallDetected, RISING);
+  enablePiezoInterrupt(); // Enable interrupts for the ball detection pin
   pinMode(V_MEASURE, INPUT); // Initialize voltage measurement pin
-  analogReadResolution(12);  // 4096 possible values
+  analogReadResolution(12);  // 12 BITS → 4096 possible values
 }
 
 void setupGatedriver()
 {
   pinMode(GATE_DRIVE_HIN, OUTPUT);
   pinMode(GATE_DRIVE_LIN, OUTPUT);
-  digitalWrite(GATE_DRIVE_LIN, HIGH); // Charge the bootstrap capacitor by driving the low side first high
-  delay(50);
-  digitalWrite(GATE_DRIVE_LIN, LOW);
 }
 
 void setupi2C_DAC()
 {
-  // i2c_init(I2C_PORT, 100 * 1000); // Initialize I2C with a clock speed of 100kHz
   gpio_set_function(I2C_SDA, GPIO_FUNC_I2C);
   gpio_set_function(I2C_SCL, GPIO_FUNC_I2C);
-  // Wire.begin(); // Initialize the I2C bus
   dac.begin(); // Initialize the DAC
-  setVoltagePiezo(100);
+  setPiezoActuatorVoltage(100);
 }
 
 void setupEncoder()
 {
   pinMode(ENCODER_A, INPUT_PULLUP);
   pinMode(ENCODER_B, INPUT_PULLUP);
-  pinMode(PUSH_BUTTON, INPUT_PULLUP);
   currentStateClock = digitalRead(ENCODER_A);
-  lastEncoderAClock = currentStateClock;
+  lastEncoderA = currentStateClock;
   currentENCODER_B = digitalRead(ENCODER_B);
   lastEncoderB = currentENCODER_B;
 }
 
 void setupScreen()
 {
+  while (1) // Wait until the external 12V supply is connected, so as to initialize the display. The display is not powered from the microcontroller in this version.
+  {
+    if (readVoltagePiezo() > 10)
+    {
+      break;
+    }
+  }
+  digitalWrite(TFT_RST, LOW); // Reset the display
   screen.begin();
   screen.setRotation(1);
   screen.fillScreen(COLOR_FILL_RECT);
-  displayMenuText();    // show mode text
-  displayReadyString(); // show ready string
+  displayMenuText();       // show mode text
+  displayReadyString();    // show ready string
+  displayHeader(headline); // Print the header at the top
 }
 
 void setupSerial()
@@ -888,27 +917,17 @@ void setupSerial()
   Serial.print(F_CPU / 1000000);
   Serial.println(F(" MHz"));
   // inputString.reserve(200); // Reserve 200 bytes for the inputString to reduce dynamic allocation
-
-  Serial.begin(115200);
-  // while (!Serial) // start serial comms, microcontroller won't start until communication is established
-  ;
-  delay(50);
+  int startTimerSerial = millis();
+  Serial.print(startTimerSerial);
+  Serial.begin(1000000);
+  delay(300);
 }
-
-// void testTimes()
-// {
-//   handleSerialInput();
-//   executePushAndCatchAction(1);
-//   timerDelays[menuItemIndex]++;
-//   Serial.println(MenuOptionsShort[menuItemIndex]);
-//   Serial.println(timerDelays[menuItemIndex]);
-// }
 
 void setup()
 {
   setupEncoder();
   setupGatedriver();
-  // setupi2C_DAC();
+  // setupi2C_DAC(); // doesn't work in PCB version 1.0
   setupPins();
   setupSerial();
   // executePushAction();
@@ -919,7 +938,6 @@ void setup()
 void loop()
 {
   inputMethods();
-
   ledImpulse();
   // testTimes();
 }
