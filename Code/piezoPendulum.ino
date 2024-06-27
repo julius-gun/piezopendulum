@@ -1,13 +1,12 @@
 /*!
  * @file piezoPendulum.ino
  * @brief This script is the main script to use the Piezo pendulum. The Raspberry Pi Pico RP2040 controls the display, reads the encoder and button inputs and controls the piezostack.
- * @n This demo supports at least Raspberry Pi Pico. Other boards are not tested. 
+ * @n This demo supports at least Raspberry Pi Pico. Other boards are not tested.
  * @authors [Julius Gun, Jan Rodewald] //Jan Rodewald developed the first version V0.1
  * @version V1.2
  * @date 2024-06-14
  * https://github.com/julius-gun/piezopendulum
  */
-
 
 // #include <Arduino.h>
 // ------------------------------------------------------------------------------------------------------------------------------
@@ -99,11 +98,11 @@ ButtonControl PUSH_BUTTON(3);
 DFRobot_ST7789_240x320_HW_SPI screen(/*dc=*/TFT_DC, /*cs=*/TFT_CS, /*rst=*/TFT_RST);
 
 // Miscellaneous variables
-bool SERIAL_DEBUG = 0; // CHANGE TO 0 in normal mode. Do you want to see the debug messages? 1 = yes, 0 = no
-bool EXPERT_MODE = 0;  // CHANGE TO 0 in normal mode. Without it the delay finder function is disabled. 1 = yes, 0 = no
-int menuItemIndex = 0;     // Use this variable to store the current index of the menu
-bool currentStateClock;    // Store the status of the clock pin (HIGH or LOW)
-bool lastEncoderA;         // Store the PREVIOUS status of the clock pin (HIGH or LOW)
+bool SERIAL_DEBUG = 0;  // CHANGE TO 0 in normal mode. Do you want to see the debug messages? 1 = yes, 0 = no
+bool EXPERT_MODE = 0;   // CHANGE TO 0 in normal mode. Without it the delay finder function is disabled. 1 = yes, 0 = no
+int menuItemIndex = 0;  // Use this variable to store the current index of the menu
+bool currentStateClock; // Store the status of the clock pin (HIGH or LOW)
+bool lastEncoderA;      // Store the PREVIOUS status of the clock pin (HIGH or LOW)
 bool currentENCODER_B;
 bool lastEncoderB;
 bool buttonState = HIGH;  // Current state of the button
@@ -142,9 +141,9 @@ String menuOptionsLong[MAX_MENU_ITEMS] = {
 volatile unsigned int timerDelays[MAX_MENU_ITEMS] = {
     0, // Delay for "All functions"
     0, // Delay for "Push"
-    4, // Delay for "Catch"
-    4, // Delay for "Catch 2"
-    0, // Delay for "Catch 3"
+    14, // Delay for "Catch"
+    5, // Delay for "Catch 2"
+    5, // Delay for "Catch 3"
     0, // Delay for "Resonance"
     0  // Delay for "Resonance 2"
 };
@@ -196,6 +195,47 @@ void setupInterrupts();
 void setupScreen();
 
 // ------------------------------------------------------------------------------------------------------------------------------
+// ----Functions------------------------
+void enablePiezoInterrupt() // Enable the interrupts for the ball detection pin
+
+{
+  attachInterrupt(digitalPinToInterrupt(HIT_IMPULSE), interruptBallDetected, RISING);
+}
+
+// void disablePiezoInterrupt() // Disable the interrupts for the ball detection pin → rather not use this function because it takes too long to reenable the interrupt
+// {
+//   // Disable the interrupts for the ball detection pin
+//   detachInterrupt(digitalPinToInterrupt(HIT_IMPULSE));
+// }
+
+// unsigned long lastDetectionTime = 0;                // Tracks the time since the last detection
+volatile unsigned int lastImpulseDebounceTime = 0; // Timestamp of the last time the ISR was triggered
+
+// Interrupt Service Routine (ISR) for the ball detected pin
+const uint16_t IMPULSE_DEBOUNCE_DELAY_CATCH = 4; // Debounce delay for resonance in milliseconds
+
+void interruptBallDetected()
+{
+  // Check if enough time has passed since the last detected interrupt (debouncing)
+  if ((millis() - lastImpulseDebounceTime) > IMPULSE_DEBOUNCE_DELAY_CATCH)
+  {
+    ballDetected = true;
+    digitalWrite(LED_IMPULSE, HIGH); // Turn on the LED
+    ledOnTime = millis();            // Set the time the LED was turned on
+    // Update the lastImpulseDebounceTime to the current time
+    lastImpulseDebounceTime = millis();
+  }
+}
+
+void delayAndDoStuff(int timeDelayMilliseconds)
+{
+  unsigned int currentTime = millis();
+  while (millis() - currentTime < timeDelayMilliseconds)
+  {
+    ledImpulse();
+  }
+}
+
 bool longPressActive = false;
 /**
  * Checks if the button is pressed and returns a value indicating the button state, with debouncing.
@@ -318,7 +358,7 @@ void inputMethods()
   {
     menuSelectAction();
   }
-  if (longPressActive && EXPERT_MODE) 
+  if (longPressActive && EXPERT_MODE)
   {
     delayTimeHelper();
   }
@@ -332,7 +372,7 @@ void menuSelectAction()
     Serial.print("Piezo command selected: ");
     Serial.println(menuOptionsShort[menuItemIndex]); // Print the string
   }
-  delay(500);                           // Delay so that the push button does not cause the ball to not be in the right position
+  delayAndDoStuff(500);                 // Delay so that the push button does not cause the ball to not be in the right position
   ballDetected = false;                 // if the push button caused the interrupt to be triggered, falsify it again
   performPiezoAction(commandToExecute); // menuItemIndex starts at 0, and case 1 is "Push"
   readyState = 1;                       // Reset the ready flag to prevent repeated command execution without button presses
@@ -540,7 +580,7 @@ int piezoOnTime;
 void waitForBallImpacts(int numberOfDetections)
 {
   unsigned int startTime = micros();
-  ballDetected = false; // Reset the ballDetected flag
+  ballDetected = false;         // Reset the ballDetected flag
   int numberBouncesDetected = 0;
   while (numberBouncesDetected < numberOfDetections)
   {
@@ -557,40 +597,7 @@ void waitForBallImpacts(int numberOfDetections)
   }
 }
 
-void enablePiezoInterrupt() // Enable the interrupts for the ball detection pin
-
-{
-  attachInterrupt(digitalPinToInterrupt(HIT_IMPULSE), interruptBallDetected, RISING);
-}
-
-// void disablePiezoInterrupt() // Disable the interrupts for the ball detection pin → rather not use this function because it takes too long to reenable the interrupt
-// {
-//   // Disable the interrupts for the ball detection pin
-//   detachInterrupt(digitalPinToInterrupt(HIT_IMPULSE));
-// }
-
-// unsigned long lastDetectionTime = 0;                // Tracks the time since the last detection
-volatile unsigned int lastImpulseDebounceTime = 0; // Timestamp of the last time the ISR was triggered
-
-// Interrupt Service Routine (ISR) for the ball detected pin
-volatile int ballDetectedNumber = 0;
-volatile bool resonanceMode = false;             // Flag to indicate if the resonance mode is active
-const uint16_t IMPULSE_DEBOUNCE_DELAY_CATCH = 4; // Debounce delay for resonance in milliseconds
-
-void interruptBallDetected()
-{
-  // Check if enough time has passed since the last detected interrupt (debouncing)
-  if ((millis() - lastImpulseDebounceTime) > IMPULSE_DEBOUNCE_DELAY_CATCH)
-  {
-    ballDetected = true;
-    digitalWrite(LED_IMPULSE, HIGH); // Turn on the LED
-    ledOnTime = millis();            // Set the time the LED was turned on
-    // Update the lastImpulseDebounceTime to the current time
-    lastImpulseDebounceTime = millis();
-  }
-}
-
-int LED_ON_TIME = 500;
+int LED_ON_TIME = 150;
 // Function to handle the LED impulse
 void ledImpulse()
 {
@@ -612,10 +619,10 @@ void executePushAction()
 
     chargeBootstrapCapacitor(CHARGE_BOOTSTRAP_CAP_TIME_MICROSECONDS);
     chargePiezo();
-    delay(100);
+    delayAndDoStuff(100);
     dischargePiezo(0);
     ledImpulse();
-    delay(500);
+    delayAndDoStuff(500);
     ledImpulse();
   }
 }
@@ -625,33 +632,28 @@ void executePushAndCatchAction(int bounceCount)
   int timeToDischargePiezoMicroseconds = timerDelays[bounceCount + 1];
   for (int repetitionIndex = 0; repetitionIndex < NUMBER_OF_PIEZO_REPETITIONS; repetitionIndex++)
   {
-    delay(500);
+    delayAndDoStuff(500);
     chargeBootstrapCapacitor(CHARGE_BOOTSTRAP_CAP_TIME_MICROSECONDS);
     chargePiezo(); // Shoot the ball away
     waitForBallImpacts(bounceCount);
     dischargePiezo(timeToDischargePiezoMicroseconds); // Catch the ball bounce-free
-    ledImpulse();
-    delay(800);
-    ledImpulse();
+    delayAndDoStuff(800);
   }
 }
 
 int NUMBER_OF_BALL_REPETITIONS_RESONANCE = 8;
-int chargeBootstrapCapacitorTime = 13;
+int chargeBootstrapCapacitorTime = 12;
 void executeResonanceAction(int bounceCount)
 {
-  delay(500);
-  resonanceMode = true;
+  delayAndDoStuff(500);
   for (int repetitionIndex = 0; repetitionIndex < NUMBER_OF_BALL_REPETITIONS_RESONANCE; repetitionIndex++)
   {
     chargeBootstrapCapacitor(chargeBootstrapCapacitorTime);
     chargePiezo(); // Shoot the ball away
     waitForBallImpacts(bounceCount);
     dischargePiezo(0); // Shoot the ball again, this time higher then before
-    ledImpulse();
-    chargeBootstrapCapacitorTime += 2; // Increase the charge time for the bootstrap capacitor so that the ball flies higher each following bounce
+    chargeBootstrapCapacitorTime += 1; // Increase the charge time for the bootstrap capacitor so that the ball flies higher each following bounce
   }
-  resonanceMode = false;
 }
 
 void executeAllPiezoActions()
@@ -667,7 +669,7 @@ void executeAllPiezoActions()
       displayTimeMicroseconds();
     }
     performPiezoAction(currentMenuIndex); // menuItemIndex starts at 0, and case 1 is "Push"
-    delay(800);
+    delayAndDoStuff(800);
   }
   menuItemIndex = 0;
   readyState = 1;
@@ -680,7 +682,7 @@ void performPiezoAction(int piezoSelect)
   displayCurrentFunctionDescription(); // Update the display to show the long description of the selected function
   ledImpulse();
   // Log the selected command if serial debug is enabled
-  delay(700); // Delay to show description
+  delayAndDoStuff(700); // Delay to show description
   // Execute action based on the selected command
   switch (piezoSelect)
   {
@@ -730,7 +732,7 @@ void performPiezoAction(int piezoSelect)
 float readVoltagePiezo()
 {
   int current_voltage = analogRead(V_MEASURE);
-  delay(10);
+  delayAndDoStuff(10);
   current_voltage *= 0.0374; // Voltage divider equals to: analogRead(V_MEASURE) * (2200 + 100000) / 2200
   return current_voltage;
 }
@@ -773,7 +775,7 @@ void delayTimeHelper()
   int commandToExecute = menuItemIndex + 1; // Menu item index matches performPiezoAction case
   int lastEncoderPosition = 0;
   int currentEncoderPosition; // Function to get current encoder position
-  delay(500);                 // Delay to prevent accidental rotation of encoder
+  delayAndDoStuff(500);       // Delay to prevent accidental rotation of encoder
   while (longPressActive)
   {
     readyState = 0;
@@ -864,7 +866,7 @@ void setupPins()
   pinMode(LED_POWER, OUTPUT);
   digitalWrite(LED_POWER, HIGH);
   pinMode(HIT_IMPULSE, INPUT_PULLUP);
-  enablePiezoInterrupt(); // Enable interrupts for the ball detection pin
+  enablePiezoInterrupt();    // Enable interrupts for the ball detection pin
   pinMode(V_MEASURE, INPUT); // Initialize voltage measurement pin
   analogReadResolution(12);  // 12 BITS → 4096 possible values
 }
