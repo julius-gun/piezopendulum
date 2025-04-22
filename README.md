@@ -1,5 +1,5 @@
 # piezopendulum
-[![Watch the video](https://raw.githubusercontent.com/julius-gun/piezopendulum/assets/piezopendulum_thumbnail.jpg)](https://raw.githubusercontent.com/julius-gun/piezopendulum/assets/piezopendulum.mp4)
+[![Watch the video](https://github.com/julius-gun/piezopendulum/raw/refs/heads/main/assets/piezopendulum_thumbnail.jpg)](https://github.com/julius-gun/piezopendulum/raw/refs/heads/main/assets/piezopendulum.mp4)
 
 The developed device serves as a practical model to demonstrate the piezoelectric phenomena.
 By using a linear piezoelectric actuator with inherent sensing capabilities, it eliminates the need
