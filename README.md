@@ -25,17 +25,11 @@ The new demonstrator successfully replicates all key operations of the original,
 *   **Self-Sensing Actuation:** The piezo actuator itself detects the returning ball's impact, eliminating the need for external sensors.
 *   **Precise Bounce-Free Catch:** The system calculates the exact moment to discharge the piezo's energy, causing the ball to "stick" to the actuator without bouncing.
 *   **Integrated & Robust Design:** A compact, 3D-printed enclosure integrates the actuator and control unit, eliminating fragile external cables.
-*   **Intuitive User Interface:** The original 16-button control panel was replaced with a simple rotary encoder and a clear LCD screen, making operation straightforward.
-
-## The Transformation
-
-The new design is a complete departure from the original's cabled, multi-box setup. The modernized version is a single, elegant, and durable unit, making it more robust for hands-on use in the classroom.
+*   **Intuitive User Interface:** Simple rotary encoder and a clear LCD screen.
 
 ![Comparison of the old and new pendulums](assets/Comparison%20View%20with%20Moldovan.jpg)
-*The original 1993 pendulum (left) next to the modernized, integrated 2024 version (right).*
 
 ![Side views of the new pendulum](assets/sideviews.jpg)
-*The final device is compact and self-contained.*
 
 ## Technical Breakdown
 
