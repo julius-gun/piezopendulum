@@ -1,4 +1,5 @@
 
+![[piezo animation]](assets/piezopendulum_animation.gif)
 ---
 
 # The Self-Sensing Piezoelectric Pendulum
