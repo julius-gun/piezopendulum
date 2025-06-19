@@ -23,7 +23,7 @@ The new demonstrator successfully replicates all key operations of the original,
 
 *   **Complete Technological Overhaul:** Replaced 30-year-old electronics and Assembler code with a modern system based on a **Raspberry Pi Pico** and **C++**.
 *   **Self-Sensing Actuation:** The piezo actuator itself detects the returning ball's impact, eliminating the need for external sensors.
-*   **Precise Bounce-Free Catch:** The system calculates the exact moment to discharge the piezo's energy, causing the ball to "stick" to the actuator without bouncing.
+*   **Precise Bounce-Free Catch:** The system discharges the piezo's energy at the right moment, causing the ball to "stick" to the actuator without bouncing.
 *   **Integrated & Robust Design:** A compact, 3D-printed enclosure integrates the actuator and control unit, eliminating fragile external cables.
 *   **Intuitive User Interface:** Simple rotary encoder and a clear LCD screen.
 
