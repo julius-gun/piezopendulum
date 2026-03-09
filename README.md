@@ -1,5 +1,8 @@
 
 ![[piezo animation]](assets/piezopendulum_animation.gif)
+
+**[Download the full video](https://github.com/julius-gun/piezopendulum/raw/refs/heads/main/assets/piezopendulum.mp4)**
+
 ---
 
 # The Self-Sensing Piezoelectric Pendulum
